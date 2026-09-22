@@ -4,7 +4,7 @@
 # output has no runtime dependencies.
 set -euo pipefail
 
-HOST="${DEPLOY_HOST:-vps}"
+HOST="${DEPLOY_HOST:-xyra}"
 REMOTE_DIR="${DEPLOY_DIR:-discord-online}"
 UNIT="discord-online.service"
 
