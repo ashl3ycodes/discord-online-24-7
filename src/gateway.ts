@@ -66,16 +66,16 @@ export class PresenceClient {
 
 	/**
 	 * Names and animated flags for custom emoji, which a custom status refers to by id
-	 * alone. A few hundred kilobytes against the tens of megabytes of READY that get freed
-	 * right after, and the alternative is guessing at a name and rendering an animated
-	 * emoji as a still image.
+	 * alone. Only those two fields are kept: the rest of a READY emoji -- the roles array
+	 * especially -- would be retained for the life of the process by a payload this code
+	 * otherwise hands straight back to the collector.
 	 */
 	private readonly emojis = new Map<string, GuildEmoji>();
 
 	/** Discord sends no event when a custom status expires; see syncPresence(). */
 	private expiry: NodeJS.Timeout | undefined;
 
-	/** What was last published, so reconnects don't repeat a line that hasn't changed. */
+	/** The presence as last published, so nothing republishes a presence that is the same. */
 	private published = "";
 
 	public constructor(config: Config) {
@@ -134,6 +134,7 @@ export class PresenceClient {
 			let heartbeatTimer: NodeJS.Timeout | undefined;
 			let acknowledged = true;
 			let settled = false;
+			let unpublished = true;
 
 			// Every exit path funnels through here so a socket can never leave its heartbeat
 			// timer running, and so a late close event after a zombie kill cannot resolve the
@@ -171,13 +172,24 @@ export class PresenceClient {
 			const syncPresence = (): void => {
 				clearTimeout(this.expiry);
 				const presence = this.presence();
-				send(Opcode.PresenceUpdate, presence);
+				const frame = JSON.stringify(presence);
+				const changed = frame !== this.published;
 
-				const [activity] = presence.activities;
-				const summary = activity ? `${activity.emoji?.name ?? ""} ${activity.state ?? ""}`.trim() : "none";
-				if (summary !== this.published) {
-					this.published = summary;
-					log.info(`Custom status: ${summary}`);
+				if (changed) {
+					const [activity] = presence.activities;
+					log.info(`Custom status: ${activity ? `${activity.emoji?.name ?? ""} ${activity.state ?? ""}`.trim() : "none"}`);
+				}
+
+				// Emoji churn in a guild arrives one event per emoji, and a settings update can
+				// leave the custom status untouched, so most of what reaches here changes
+				// nothing. Republishing an identical presence would spend a budget of five
+				// updates per twenty seconds on nothing. Each connection still publishes once
+				// whatever happens: a RESUME restores the presence the old session had, and
+				// nothing else ever re-states it.
+				if (changed || unpublished) {
+					unpublished = false;
+					this.published = frame;
+					send(Opcode.PresenceUpdate, presence);
 				}
 
 				const expiresAt = this.customStatus?.expires_at;
@@ -186,6 +198,11 @@ export class PresenceClient {
 					// Capped because setTimeout takes a 32-bit delay and silently fires at once
 					// past that; a clamped wake-up just re-arms itself.
 					this.expiry = setTimeout(syncPresence, Math.min(remaining + 1_000, 2_147_483_647));
+				} else if (expiresAt) {
+					// It has been published as gone. Forgetting it here matters because nothing
+					// else will: the client that would clear the setting is the one that is off,
+					// so READY and USER_SETTINGS_UPDATE keep handing the expired status back.
+					this.customStatus = null;
 				}
 			};
 
@@ -337,7 +354,8 @@ export class PresenceClient {
 							// A server joined after READY, or an emoji added to one. Without this the
 							// status would keep an emoji it cannot name until the next reconnect.
 							const guild = payload.d as EmojiHolder;
-							if (this.remember(guild) && this.customStatus?.emoji_id) {
+							const wanted = this.customStatus?.emoji_id;
+							if (this.remember(guild) && guild.emojis?.some((emoji) => emoji.id === wanted)) {
 								syncPresence();
 							}
 						}
@@ -351,8 +369,8 @@ export class PresenceClient {
 	private remember(guild: EmojiHolder): boolean {
 		return guild.emojis?.reduce((added, emoji) => {
 			const known = this.emojis.get(emoji.id);
-			this.emojis.set(emoji.id, emoji);
-			return added || known?.name !== emoji.name || known.animated !== emoji.animated;
+			this.emojis.set(emoji.id, { id: emoji.id, name: emoji.name, animated: emoji.animated });
+			return added || known?.name !== emoji.name || known?.animated !== emoji.animated;
 		}, false) ?? false;
 	}
 

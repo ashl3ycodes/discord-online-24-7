@@ -79,6 +79,11 @@ assert.deepEqual(activities(), [
 	{ type: 4, name: "Custom Status", state: null, emoji: { id: "77", name: "new", animated: false } }
 ], "and is published as soon as the guild carrying it arrives");
 
+const quiet = sent.length;
+socket.receive({ op: 0, s: 6, t: "GUILD_EMOJIS_UPDATE", d: { guild_id: "9", emojis: [{ id: "99", name: "elsewhere" }] } });
+socket.receive({ op: 0, s: 6, t: "GUILD_EMOJIS_UPDATE", d: { guild_id: "5", emojis: [{ id: "77", name: "new" }, { id: "78", name: "extra" }] } });
+assert.equal(sent.length, quiet, "emoji churn that leaves the published status alone publishes nothing");
+
 socket.receive({ op: 0, s: 7, t: "USER_SETTINGS_UPDATE", d: { custom_status: { text: "brb", expires_at: new Date(Date.now() + 200).toISOString() } } });
 assert.equal(activities()[0].state, "brb");
 const beforeExpiry = sent.length;
@@ -93,9 +98,16 @@ socket.receive({ op: 0, s: 9, t: "USER_SETTINGS_UPDATE", d: { custom_status: { t
 socket.close();
 await tick(1_500);
 assert.equal(lastFrame(6).d.session_id, "abc", "a drop resumes the session instead of identifying again");
+const beforeResume = sent.length;
 socket.receive({ op: 0, s: 10, t: "RESUMED", d: {} });
+assert.ok(sent.length > beforeResume, "the resumed connection publishes the status itself");
 assert.equal(activities()[0].state, "keep", "the status survives the reconnect, expiry timer and all");
 
 client.stop();
 await running;
+assert.equal(
+	process.getActiveResourcesInfo().filter((resource) => resource === "Timeout").length,
+	0,
+	"stopping leaves no timer behind to hold the process open"
+);
 console.log("ok");
