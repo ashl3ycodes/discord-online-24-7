@@ -27,7 +27,9 @@ yarn install
 ### Rename the `.env.example` file to `.env` and fill in the variables:
 `DISCORD_OAUTH_TOKEN`:  Your Discord token  
 `STATUS`:  Can be one of the following: online, idle, dnd, invisible  
-`CUSTOM_STATUS_TEXT`: Your custom status message — if left empty, you won’t have a custom status, duh!
+
+### Custom status
+There's nothing to configure: the script mirrors whatever custom status you set in your Discord client (text, emoji and "Clear after"), so it stays visible after you close Discord. Change it or clear it on any device and the script follows within a second.
 
 ### Run the script and anything should be working:
 ```shell
