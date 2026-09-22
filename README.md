@@ -29,7 +29,11 @@ yarn install
 ### Rename the `.env.example` file to `.env` and fill in the variables:
 `DISCORD_OAUTH_TOKEN`:  Your Discord token  
 `STATUS`:  Can be one of the following: online, idle, dnd, invisible  
-`CUSTOM_STATUS_TEXT`: Your custom status message — if left empty, you won’t have a custom status, duh!
+
+### Your custom status
+Nothing to configure. Whatever custom status you set in your own Discord client — text,
+emoji and "Clear after" — is mirrored here, so it stays up after you close Discord.
+Change it or clear it on any device and this follows along.
 
 ### Build it and run it:
 ```shell
@@ -76,7 +80,12 @@ Behaviour is the same; the reliability around it isn't. The notable fixes:
   *any* failure, including a transient DNS blip; only an actual rejection is fatal now.
 - **Reconnects back off exponentially with jitter** rather than retrying on a flat 5s.
 - **`RECONNECT` and `INVALID_SESSION` are handled** — both were previously ignored.
-- **An empty `CUSTOM_STATUS_TEXT` sets no status** instead of a blank one.
+- **The custom status is mirrored from the account** instead of read from a fixed
+  `CUSTOM_STATUS_TEXT`. Discord never publishes the status stored in your settings by
+  itself — every connected client puts it in its own presence — so closing Discord used
+  to leave this session online with nothing under the name. It now follows `READY` and
+  `USER_SETTINGS_UPDATE`, emoji included, and runs the expiry timer that your client
+  would have run had it been open.
 - **Failures say why.** Every exit path used to be a bare `process.exit(1)`.
 - **Zero runtime dependencies.** `dotenv`, `node-fetch` and `ws` are all replaced by
   built-ins (`process.loadEnvFile`, `fetch`, and the global `WebSocket`).

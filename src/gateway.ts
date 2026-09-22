@@ -1,7 +1,18 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "./log.js";
 import type { Config } from "./config.js";
-import { Opcode, type HelloData, type Payload, type Presence, type ReadyData } from "./types.js";
+import {
+	Opcode,
+	type Activity,
+	type CustomStatus,
+	type EmojiHolder,
+	type GuildEmoji,
+	type HelloData,
+	type Payload,
+	type Presence,
+	type ReadyData,
+	type UserSettings
+} from "./types.js";
 
 const ENTRY_URL = "wss://gateway.discord.gg/?v=9&encoding=json";
 
@@ -43,6 +54,26 @@ export class PresenceClient {
 	private failures = 0;
 	private stopping = false;
 	private socket: WebSocket | null = null;
+
+	/**
+	 * The account's custom status, as Discord last reported it. Nobody else publishes it
+	 * for us: the value in the settings is only how clients sync it to each other, and each
+	 * one puts it in its own presence. That is why closing the desktop client used to take
+	 * the custom status down with it, leaving this session online with nothing under the
+	 * name. Held across reconnects so a RESUME, which never repeats READY, keeps it.
+	 */
+	private customStatus: CustomStatus | null = null;
+
+	/**
+	 * Names and animated flags for custom emoji, which a custom status refers to by id
+	 * alone. A few hundred kilobytes against the tens of megabytes of READY that get freed
+	 * right after, and the alternative is guessing at a name and rendering an animated
+	 * emoji as a still image.
+	 */
+	private readonly emojis = new Map<string, GuildEmoji>();
+
+	/** Discord sends no event when a custom status expires; see syncPresence(). */
+	private expiry: NodeJS.Timeout | undefined;
 
 	public constructor(config: Config) {
 		this.config = config;
@@ -110,6 +141,7 @@ export class PresenceClient {
 				}
 				settled = true;
 				clearTimeout(heartbeatTimer);
+				clearTimeout(this.expiry);
 				socket.onopen = null;
 				socket.onmessage = null;
 				socket.onerror = null;
@@ -123,6 +155,26 @@ export class PresenceClient {
 			const send = (op: Opcode, d: unknown): void => {
 				if (socket.readyState === WebSocket.OPEN) {
 					socket.send(JSON.stringify({ op, d }));
+				}
+			};
+
+			/**
+			 * Publishes whatever the settings currently say, and arms a timer for a status
+			 * that expires. The expiry has to be enforced here: the server keeps the timestamp
+			 * but sends nothing when it passes -- it is the official client that notices and
+			 * clears the setting, and the whole point of this process is to be the only thing
+			 * connected once that client is gone.
+			 */
+			const syncPresence = (): void => {
+				clearTimeout(this.expiry);
+				send(Opcode.PresenceUpdate, this.presence());
+
+				const expiresAt = this.customStatus?.expires_at;
+				const remaining = expiresAt ? Date.parse(expiresAt) - Date.now() : 0;
+				if (remaining > 0) {
+					// Capped because setTimeout takes a 32-bit delay and silently fires at once
+					// past that; a clamped wake-up just re-arms itself.
+					this.expiry = setTimeout(syncPresence, Math.min(remaining + 1_000, 2_147_483_647));
 				}
 			};
 
@@ -232,6 +284,14 @@ export class PresenceClient {
 							this.failures = 0;
 							log.info(`Online as ${data.user.username} (${data.user.id}) [${this.config.status}].`);
 
+							if (data.user_settings) {
+								this.customStatus = data.user_settings.custom_status ?? null;
+							} else {
+								log.warn("READY carried no user_settings; the custom status cannot be mirrored.");
+							}
+							data.guilds?.forEach((guild) => this.remember(guild));
+							syncPresence();
+
 							// READY carries every guild the account is in, so it arrives as tens of
 							// megabytes of JSON and parsing it leaves an object graph that size behind.
 							// Everything except the few fields above is garbage immediately -- but this
@@ -247,6 +307,28 @@ export class PresenceClient {
 						} else if (payload.t === "RESUMED") {
 							this.failures = 0;
 							log.info("Session resumed.");
+
+							// Anything missed while the socket was down is replayed right after this,
+							// so the only stale thing is an expiry that came and went in the meantime,
+							// along with the timer that was cleared with the old connection.
+							if (this.customStatus?.expires_at) {
+								syncPresence();
+							}
+						} else if (payload.t === "USER_SETTINGS_UPDATE") {
+							// A partial: only what changed is serialized, so an update about
+							// something else entirely says nothing about the custom status.
+							const settings = payload.d as UserSettings;
+							if ("custom_status" in settings) {
+								this.customStatus = settings.custom_status ?? null;
+								syncPresence();
+							}
+						} else if (payload.t === "GUILD_CREATE" || payload.t === "GUILD_EMOJIS_UPDATE") {
+							// A server joined after READY, or an emoji added to one. Without this the
+							// status would keep an emoji it cannot name until the next reconnect.
+							const guild = payload.d as EmojiHolder;
+							if (this.remember(guild) && this.customStatus?.emoji_id) {
+								syncPresence();
+							}
 						}
 						break;
 				}
@@ -254,19 +336,50 @@ export class PresenceClient {
 		});
 	}
 
+	/** Stores a guild's emoji, and reports whether any of them are new to us. */
+	private remember(guild: EmojiHolder): boolean {
+		return guild.emojis?.reduce((added, emoji) => {
+			const known = this.emojis.get(emoji.id);
+			this.emojis.set(emoji.id, emoji);
+			return added || known?.name !== emoji.name || known.animated !== emoji.animated;
+		}, false) ?? false;
+	}
+
 	/**
 	 * An activity with an empty state still registers as a custom status and shows up as a
-	 * blank line under the name, so an unset CUSTOM_STATUS_TEXT has to mean no activity at
-	 * all rather than an empty one.
+	 * blank line under the name, so a status with nothing left in it has to mean no activity
+	 * at all rather than an empty one.
 	 */
 	private presence(): Presence {
 		return {
 			status: this.config.status,
 			since: 0,
-			activities: this.config.customStatusText
-				? [{ type: 4, name: "Custom Status", state: this.config.customStatusText }]
-				: [],
+			activities: this.activities(),
 			afk: false
 		};
+	}
+
+	private activities(): Activity[] {
+		const status = this.customStatus;
+		if (!status || (status.expires_at && Date.parse(status.expires_at) <= Date.now())) {
+			return [];
+		}
+
+		const activity: Activity = { type: 4, name: "Custom Status", state: status.text || null };
+
+		if (status.emoji_id) {
+			// The settings record a custom emoji by id and, depending on which client wrote
+			// them, nothing else. A name is required in the activity, so an emoji from a guild
+			// this session has never seen is dropped rather than sent nameless.
+			const emoji = this.emojis.get(status.emoji_id);
+			const name = emoji?.name ?? status.emoji_name;
+			if (name) {
+				activity.emoji = { id: status.emoji_id, name, animated: emoji?.animated ?? false };
+			}
+		} else if (status.emoji_name) {
+			activity.emoji = { name: status.emoji_name };
+		}
+
+		return activity.state || activity.emoji ? [activity] : [];
 	}
 }

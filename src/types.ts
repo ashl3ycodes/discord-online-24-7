@@ -4,6 +4,7 @@ export enum Opcode {
 	Dispatch = 0,
 	Heartbeat = 1,
 	Identify = 2,
+	PresenceUpdate = 3,
 	Resume = 6,
 	Reconnect = 7,
 	InvalidSession = 9,
@@ -32,12 +33,51 @@ export interface ReadyData {
 		id: string;
 		username: string;
 	};
+	/**
+	 * The legacy JSON settings, which is where the account's custom status lives. Discord
+	 * marks them deprecated in favour of a protobuf blob and omits them for clients that
+	 * ask for the USER_SETTINGS_PROTO capability, which this one deliberately does not.
+	 */
+	user_settings?: UserSettings;
+	guilds?: EmojiHolder[];
+}
+
+export interface UserSettings {
+	custom_status?: CustomStatus | null;
+}
+
+/** Nullable throughout: a status can be text only, emoji only, or cleared field by field. */
+export interface CustomStatus {
+	text?: string | null;
+	emoji_id?: string | null;
+	emoji_name?: string | null;
+	/** ISO 8601, unlike the protobuf form which counts milliseconds. */
+	expires_at?: string | null;
+}
+
+/** READY guilds, GUILD_CREATE and GUILD_EMOJIS_UPDATE all carry emojis in this shape. */
+export interface EmojiHolder {
+	emojis?: GuildEmoji[];
+}
+
+export interface GuildEmoji {
+	id: string;
+	name: string;
+	animated?: boolean;
+}
+
+export interface ActivityEmoji {
+	/** Absent for a unicode emoji, which is carried by name alone. */
+	id?: string;
+	name: string;
+	animated?: boolean;
 }
 
 export interface Activity {
 	type: 4;
 	name: "Custom Status";
-	state: string;
+	state: string | null;
+	emoji?: ActivityEmoji;
 }
 
 export interface Presence {

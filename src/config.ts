@@ -6,7 +6,6 @@ const STATUSES: readonly string[] = ["online", "idle", "dnd", "invisible"];
 export interface Config {
 	token: string;
 	status: Status;
-	customStatusText: string;
 }
 
 /** Raised for anything a restart cannot fix, so index.ts can exit instead of looping. */
@@ -41,7 +40,6 @@ export function loadConfig(): Config {
 
 	return {
 		token,
-		status: status as Status,
-		customStatusText: process.env.CUSTOM_STATUS_TEXT?.trim() ?? ""
+		status: status as Status
 	};
 }
