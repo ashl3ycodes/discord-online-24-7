@@ -1,0 +1,47 @@
+[Unit]
+Description=Discord Online 24/7
+Documentation=https://github.com/ashl3ycodes/Discord-Online-24-7
+# There is no network-online.target in the user manager to order against. The client
+# retries the gateway on its own and Restart=always covers a boot that outruns the
+# network, so an ordering dependency would buy nothing here.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+[Service]
+Type=simple
+# config.ts resolves .env one level up from the compiled dist/ it runs from, so the unit
+# has to start in the project root for the token to be found.
+WorkingDirectory=%h/discord-online
+# --expose-gc is what lets gateway.ts collect the READY payload once it has taken the
+# three fields it needs out of it; measured, that is the difference between ~245M and
+# ~160M resident. --max-old-space-size caps the parse itself: measured peak heapUsed for
+# a 28 MB READY is ~50M, so 128 leaves generous room while still keeping V8 from sizing
+# its heap off total system RAM (it otherwise assumes a ~530M ceiling on this box).
+ExecStart=/usr/bin/node --expose-gc --max-old-space-size=128 dist/index.js
+Environment=NODE_ENV=production
+
+Restart=always
+RestartSec=5
+# 78 is EX_CONFIG, which index.ts uses for a revoked token or a bad STATUS. Restarting
+# into that would hammer Discord's auth endpoint every five seconds and never recover,
+# so let the unit stop and surface the failure instead.
+RestartPreventExitStatus=78
+
+# index.ts traps SIGTERM to close the gateway socket cleanly rather than leaving Discord
+# to time the session out. That handshake is quick, so the window can stay short.
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+NoNewPrivileges=yes
+
+# Sized for the connect-time READY spike (~245M before the collection below brings it
+# down), not for steady state, which settles near 160M. Set this at the steady figure
+# and the cgroup throttles hard through every reconnect, swapping the parse out mid-flight.
+# MemoryHigh reclaims under pressure rather than handing the process straight to the OOM
+# killer the way MemoryMax would, so overshooting it briefly is survivable by design.
+MemoryHigh=280M
+
+SyslogIdentifier=discord-online
+
+[Install]
+WantedBy=default.target
