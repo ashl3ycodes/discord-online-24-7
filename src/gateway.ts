@@ -75,6 +75,9 @@ export class PresenceClient {
 	/** Discord sends no event when a custom status expires; see syncPresence(). */
 	private expiry: NodeJS.Timeout | undefined;
 
+	/** What was last published, so reconnects don't repeat a line that hasn't changed. */
+	private published = "";
+
 	public constructor(config: Config) {
 		this.config = config;
 	}
@@ -167,7 +170,15 @@ export class PresenceClient {
 			 */
 			const syncPresence = (): void => {
 				clearTimeout(this.expiry);
-				send(Opcode.PresenceUpdate, this.presence());
+				const presence = this.presence();
+				send(Opcode.PresenceUpdate, presence);
+
+				const [activity] = presence.activities;
+				const summary = activity ? `${activity.emoji?.name ?? ""} ${activity.state ?? ""}`.trim() : "none";
+				if (summary !== this.published) {
+					this.published = summary;
+					log.info(`Custom status: ${summary}`);
+				}
 
 				const expiresAt = this.customStatus?.expires_at;
 				const remaining = expiresAt ? Date.parse(expiresAt) - Date.now() : 0;
