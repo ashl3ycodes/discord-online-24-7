@@ -55,6 +55,9 @@ export class PresenceClient {
 	private stopping = false;
 	private socket: WebSocket | null = null;
 
+	/** Cuts a reconnect delay short on shutdown, so systemd is not left waiting on a sleep. */
+	private readonly shutdown = new AbortController();
+
 	/**
 	 * The account's custom status, as Discord last reported it. Nobody else publishes it
 	 * for us: the value in the settings is only how clients sync it to each other, and each
@@ -106,13 +109,14 @@ export class PresenceClient {
 			// and the pattern Discord watches for.
 			const delay = this.session ? RESUME_DELAY_MS : this.backoff();
 			log.warn(`Disconnected (${code}${reason ? `: ${reason}` : ""}). Reconnecting in ${Math.round(delay / 1000)}s.`);
-			await sleep(delay);
+			await sleep(delay, undefined, { signal: this.shutdown.signal }).catch(() => {});
 		}
 	}
 
 	/** Closes the live socket and lets run() fall out of its loop. */
 	public stop(): void {
 		this.stopping = true;
+		this.shutdown.abort();
 		this.socket?.close(1000, "shutting down");
 	}
 
