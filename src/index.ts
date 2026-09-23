@@ -1,4 +1,4 @@
-import { ConfigError, loadConfig, type Config } from "./config.js";
+import { ConfigError, loadConfig } from "./config.js";
 import { FatalGatewayError, PresenceClient } from "./gateway.js";
 import { log } from "./log.js";
 
@@ -9,41 +9,19 @@ import { log } from "./log.js";
  */
 const EXIT_CONFIG = 78;
 
-const API_URL = "https://discord.com/api/v9/users/@me";
-const REQUEST_TIMEOUT_MS = 10_000;
 
-/**
- * Confirms the token before opening a gateway connection, purely so an unusable one
- * fails with a readable message instead of a 4004 close code.
- *
- * Only an outright rejection is fatal. The original script exited on any failure at all,
- * which meant a VPS that started this before the network came up killed it on boot; a
- * transient error has to fall through and let the gateway's own retry loop handle it.
+/*
+ * There is deliberately no token check before the gateway connects. It used to GET
+ * /api/v9/users/@me purely so an unusable token produced a readable message instead of a
+ * 4004 close code -- a cosmetic win, paid for with the worst-looking request this program
+ * could make: a user token against the canonical token-validation endpoint, from a
+ * datacenter IP. That is the shape of a credential checker, not of a client, and it is the
+ * likeliest reason the account it belonged to was treated as compromised. The gateway
+ * already reports 4004 clearly and exits 78 on it, so nothing was lost by deleting it.
  */
-async function verifyToken(config: Config): Promise<void> {
-	let response: Response;
-	try {
-		response = await fetch(API_URL, {
-			headers: { Authorization: config.token },
-			signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-		});
-	} catch (error) {
-		log.warn(`Could not reach Discord to check the token (${(error as Error).message}). Connecting anyway.`);
-		return;
-	}
-
-	if (response.status === 401 || response.status === 403) {
-		throw new ConfigError(`Discord rejected the token (HTTP ${response.status}). Check DISCORD_OAUTH_TOKEN in .env.`);
-	}
-
-	if (!response.ok) {
-		log.warn(`Token check returned HTTP ${response.status}. Connecting anyway.`);
-	}
-}
 
 async function main(): Promise<void> {
 	const config = loadConfig();
-	await verifyToken(config);
 
 	const client = new PresenceClient(config);
 

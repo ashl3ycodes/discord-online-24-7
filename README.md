@@ -24,7 +24,7 @@ git clone https://github.com/ashl3ycodes/Discord-Online-24-7
 ```shell
 yarn install
 ```
-> These are build-time only. The compiled output has **no runtime dependencies**, so nothing from `node_modules` ships to a server.
+> All but one are build-time only. `ws` is a runtime dependency and has to travel with the build: it is what keeps the gateway handshake off Node's global `WebSocket`. `deploy.sh` ships `node_modules/ws`, which has no dependencies of its own.
 
 ### Rename the `.env.example` file to `.env` and fill in the variables:
 `DISCORD_OAUTH_TOKEN`:  Your Discord token  
@@ -87,6 +87,12 @@ Behaviour is the same; the reliability around it isn't. The notable fixes:
   `USER_SETTINGS_UPDATE`, emoji included, and runs the expiry timer that your client
   would have run had it been open.
 - **Failures say why.** Every exit path used to be a bare `process.exit(1)`.
-- **Zero runtime dependencies.** `dotenv`, `node-fetch` and `ws` are all replaced by
-  built-ins (`process.loadEnvFile`, `fetch`, and the global `WebSocket`).
+- **One runtime dependency, on purpose.** `dotenv` and `node-fetch` are gone, replaced by
+  `process.loadEnvFile` and by deleting the startup token probe outright. `ws` stays. The
+  v2.0.0 release swapped it for Node's global `WebSocket`, which is undici: that puts
+  thirteen headers on every gateway upgrade including a literal `user-agent: node`, and
+  offers ALPN in the TLS ClientHello, where `ws` sends six headers, no User-Agent and no
+  ALPN. The account this ran on was disabled thirteen hours after that swap went live,
+  having run forty days on `ws` without incident. `yarn test` fails if the dependency is
+  dropped again.
 - **`.gitignore` added** so `.env` can't be committed by accident.

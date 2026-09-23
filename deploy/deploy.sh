@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Builds locally and ships the result to the VPS. The build stays on this machine so the
-# server never needs TypeScript, or a node_modules directory at all -- the compiled
-# output has no runtime dependencies.
+# server never needs TypeScript. It does need one runtime dependency: ws, which is what
+# keeps the gateway handshake off Node's global WebSocket (see src/gateway.ts). ws has no
+# dependencies of its own, so that is the only directory that has to travel.
 set -euo pipefail
 
 HOST="${DEPLOY_HOST:-xyra}"
@@ -23,6 +24,10 @@ rsync -az --delete \
 	--exclude ".env" \
 	dist src deploy package.json tsconfig.json .env.example README.md \
 	"$HOST:$REMOTE_DIR/"
+
+# Separate because --relative is global to an invocation, and it is what puts ws at
+# node_modules/ws on the far side instead of flattening it to the project root.
+rsync -az --delete --relative node_modules/ws "$HOST:$REMOTE_DIR/"
 
 echo "==> Installing the unit"
 ssh "$HOST" "

@@ -1,3 +1,15 @@
+/**
+ * The handshake has to come from ws, not from Node's global WebSocket. Undici -- which is
+ * what `new WebSocket()` resolves to with no import -- puts thirteen headers on the upgrade
+ * including a literal `user-agent: node`, and repeats them on every reconnect and every
+ * resume. ws sends six and no User-Agent at all, which is the transport that ran for forty
+ * days without Discord reacting; the undici one drew an account disable in under thirteen
+ * hours. The two differ below TLS as well -- undici offers ALPN in the ClientHello, so the
+ * JA3/JA4 does not match either -- and no amount of header patching reaches that. Keeping
+ * this dependency is the whole point: it is not about what ws does, it is about not being
+ * undici on the wire.
+ */
+import WebSocket from "ws";
 import { setTimeout as sleep } from "node:timers/promises";
 import { log } from "./log.js";
 import type { Config } from "./config.js";
